@@ -30,7 +30,7 @@ public class WarmTaskServiceImpl implements WarmTaskService {
     @Override
     public Long create(CreateTaskRequest req) {
         if (endpointMapper.selectById(req.getEndpointId()) == null) {
-            throw new BusinessException("端点不存�? " + req.getEndpointId());
+            throw new BusinessException("端点不存在: " + req.getEndpointId());
         }
         WarmTask task = new WarmTask();
         task.setName(req.getName());
@@ -115,7 +115,7 @@ public class WarmTaskServiceImpl implements WarmTaskService {
 
     private WarmTask requireTask(Long id) {
         WarmTask task = taskMapper.selectById(id);
-        if (task == null) throw new BusinessException(404, "任务不存�? " + id);
+        if (task == null) throw new BusinessException(404, "任务不存在: " + id);
         return task;
     }
 

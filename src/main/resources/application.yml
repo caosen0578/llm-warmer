@@ -1,5 +1,7 @@
 # ============================================================
-# application.yml �?本地 fallback 默认�?# 生产环境所有配置通过 Apollo 下发，此处仅作本地开发兜�?# ============================================================
+# application.yml — 本地 fallback 默认值
+# 生产环境所有配置通过 Apollo 下发，此处仅作本地开发兜底
+# ============================================================
 server:
   port: 8090
 
@@ -13,7 +15,7 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
-# ===== 数据源（Venus/Druid，配置由 Apollo tdsql_datasource_config 命名空间下发�?====
+# ===== 数据源（Venus/Druid，配置由 Apollo tdsql_datasource_config 命名空间下发）=====
 datasource:
   namespace: tdsql_datasource_config
 

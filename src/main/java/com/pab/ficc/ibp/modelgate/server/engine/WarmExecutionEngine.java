@@ -8,10 +8,9 @@ import com.pab.ficc.ibp.modelgate.server.domain.vo.LiveStatsVO;
 import com.pab.ficc.ibp.modelgate.server.mapper.ModelEndpointMapper;
 import com.pab.ficc.ibp.modelgate.server.mapper.TaskExecutionMapper;
 import com.pab.ficc.ibp.modelgate.server.service.WarmTaskService;
+import com.pab.framework.redis.CacheProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -30,26 +29,26 @@ public class WarmExecutionEngine {
     private final WarmTaskService warmTaskService;
     private final ModelEndpointMapper endpointMapper;
     private final TaskExecutionMapper executionMapper;
-    private final StringRedisTemplate redisTemplate;
+    private final CacheProvider cacheProvider;
 
     private static final int RECENT_CALL_LIMIT = 50;
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     /**
-     * Lua 脚本：仅�?key 的值等�?owner 时才删除，防止误删其他节点的�?     * 返回 1=成功释放, 0=锁不属于本节点（已过期或被其他节点持有）
+     * Lua 脚本：仅当 key 的值等于 owner 时才删除，防止误删其他节点的锁。
+     * 返回 1=成功释放, 0=锁不属于本节点（已过期或被其他节点持有）
      */
-    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>(
-            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-            Long.class);
+    private static final String RELEASE_LOCK_LUA =
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 
     private final ConcurrentHashMap<Long, RunningExecution> runningMap = new ConcurrentHashMap<>();
 
-    /** 手动触发入口：不经过分布式锁，直接运�?*/
+    /** 手动触发入口：不经过分布式锁，直接运行 */
     public void execute(WarmTask task) {
         execute(task, null, null);
     }
 
-    /** 定时调度入口：携�?Redis 锁信息，任务结束时自动释�?*/
+    /** 定时调度入口：携带 Redis 锁信息，任务结束时自动释放 */
     public void execute(WarmTask task, String lockKey, String lockOwner) {
         if (runningMap.containsKey(task.getId())) {
             log.warn("[Engine] task={} already running on this node, skip", task.getId());
@@ -147,7 +146,7 @@ public class WarmExecutionEngine {
             running.rateFuture().cancel(false);
             running.rateScheduler().shutdownNow();
             running.workers().shutdownNow();
-            // 释放分布式锁（手动触发时 lockKey �?null，跳过）
+            // 释放分布式锁（手动触发时 lockKey 为 null，跳过）
             if (running.lockKey() != null) {
                 releaseLock(running.lockKey(), running.lockOwner());
             }
@@ -166,11 +165,14 @@ public class WarmExecutionEngine {
     }
 
     /**
-     * Lua 原子释放：仅删除属于本节点的锁，避免误删其他节点刚续约的�?     */
+     * Lua 原子释放：仅删除属于本节点的锁，避免误删其他节点刚续约的锁。
+     */
     private void releaseLock(String lockKey, String lockOwner) {
         try {
-            Long result = redisTemplate.execute(RELEASE_LOCK_SCRIPT,
-                    Collections.singletonList(lockKey), lockOwner);
+            Object result = cacheProvider.eval(
+                    RELEASE_LOCK_LUA,
+                    Collections.singletonList(lockKey),
+                    Collections.singletonList(lockOwner));
             if (Long.valueOf(1L).equals(result)) {
                 log.info("[Engine] released lock key={}", lockKey);
             } else {
@@ -227,7 +229,7 @@ public class WarmExecutionEngine {
             AtomicBoolean stopped,
             long startTimeMs,
             Deque<LiveStatsVO.RecentCall> recentCalls,
-            String lockKey,     // Redis �?key，手动触发时�?null
-            String lockOwner)   // 持锁 nodeId，用�?Lua 原子释放
+            String lockKey,
+            String lockOwner)
     {}
 }

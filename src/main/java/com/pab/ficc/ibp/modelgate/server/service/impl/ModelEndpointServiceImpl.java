@@ -78,7 +78,7 @@ public class ModelEndpointServiceImpl implements ModelEndpointService {
 
     private ModelEndpoint requireEndpoint(Long id) {
         ModelEndpoint endpoint = endpointMapper.selectById(id);
-        if (endpoint == null) throw new BusinessException(404, "模型端点不存�? " + id);
+        if (endpoint == null) throw new BusinessException(404, "模型端点不存在: " + id);
         return endpoint;
     }
 
