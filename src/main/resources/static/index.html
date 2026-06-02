@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LlmWarmer · GPU 预热调度</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:#f0f2f5;color:#1f2937;display:flex;height:100vh;overflow:hidden}
+
+/* ===== Sidebar ===== */
+.sidebar{width:220px;flex-shrink:0;background:linear-gradient(180deg,#1e1b4b 0%,#312e81 100%);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.sidebar-logo{padding:20px 20px 16px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sidebar-logo h1{color:#fff;font-size:18px;font-weight:700;letter-spacing:.5px}
+.sidebar-logo p{color:#a5b4fc;font-size:11px;margin-top:3px}
+.nav-section{padding:12px 0;flex:1;overflow-y:auto}
+.nav-label{padding:6px 16px;font-size:10px;font-weight:600;color:#6366f1;text-transform:uppercase;letter-spacing:1px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 18px;color:#c7d2fe;font-size:13px;cursor:pointer;transition:all .15s;border-left:3px solid transparent}
+.nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
+.nav-item.active{background:rgba(99,102,241,.25);color:#fff;border-left-color:#818cf8}
+.nav-item .icon{font-size:16px;width:20px;text-align:center}
+.sidebar-footer{padding:14px 18px;border-top:1px solid rgba(255,255,255,.1)}
+.sidebar-footer .token-label{font-size:10px;color:#6366f1;margin-bottom:4px;font-weight:600}
+.sidebar-footer input{width:100%;padding:6px 10px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);border-radius:6px;color:#fff;font-size:12px;outline:none}
+.sidebar-footer input::placeholder{color:#6366f1}
+.sidebar-footer input:focus{border-color:#818cf8;background:rgba(255,255,255,.15)}
+.connect-btn{width:100%;margin-top:8px;padding:7px;background:#6366f1;border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer;transition:background .2s}
+.connect-btn:hover{background:#4f46e5}
+.status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+.status-dot.on{background:#4ade80}.status-dot.off{background:#f87171}.status-dot.mock{background:#f59e0b}
+.status-text{font-size:11px;color:#94a3b8;margin-top:6px}
+
+/* ===== Main ===== */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{background:#fff;border-bottom:1px solid #e5e7eb;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar-title{font-size:16px;font-weight:600;color:#1e1b4b}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:12px;color:#64748b}
+.content{flex:1;overflow-y:auto;padding:24px}
+.panel{display:none}.panel.active{display:block}
+
+/* ===== Cards ===== */
+.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:20px;margin-bottom:16px}
+.stats-row{display:grid;gap:16px;margin-bottom:16px}
+.stat-card{background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.stat-label{font-size:12px;color:#64748b;margin-bottom:6px}
+.stat-val{font-size:26px;font-weight:700;color:#1e1b4b}
+.stat-sub{font-size:11px;color:#94a3b8;margin-top:4px}
+
+/* ===== Table ===== */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:#f8fafc;padding:9px 12px;text-align:left;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e5e7eb;white-space:nowrap}
+td{padding:11px 12px;font-size:13px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbff}
+.empty-row td{text-align:center;color:#94a3b8;padding:48px!important;background:none!important}
+
+/* ===== Tags ===== */
+.tag{display:inline-flex;align-items:center;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:600}
+.tag-green{background:#d1fae5;color:#065f46}.tag-red{background:#fee2e2;color:#991b1b}
+.tag-yellow{background:#fef3c7;color:#92400e}.tag-blue{background:#dbeafe;color:#1e40af}
+.tag-purple{background:#ede9fe;color:#5b21b6}.tag-gray{background:#f1f5f9;color:#475569}
+.tag-orange{background:#ffedd5;color:#9a3412}.tag-cyan{background:#cffafe;color:#155e75}
+
+/* ===== Buttons ===== */
+.btn{padding:7px 16px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{opacity:.88;transform:translateY(-1px)}.btn:active{transform:none}
+.btn-primary{background:#6366f1;color:#fff}.btn-success{background:#10b981;color:#fff}
+.btn-danger{background:#ef4444;color:#fff}.btn-warning{background:#f59e0b;color:#fff}
+.btn-info{background:#3b82f6;color:#fff}.btn-neutral{background:#e2e8f0;color:#334155}
+.btn-sm{padding:4px 10px;font-size:12px;border-radius:6px}.btn-icon{padding:5px 8px;border-radius:6px}
+
+/* ===== Toolbar ===== */
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:12px;flex-wrap:wrap}
+.toolbar-left{display:flex;align-items:center;gap:8px}
+.toolbar-right{display:flex;align-items:center;gap:8px}
+
+/* ===== Form ===== */
+.form-grid{display:grid;gap:14px}
+.form-grid-2{grid-template-columns:1fr 1fr}.form-grid-3{grid-template-columns:1fr 1fr 1fr}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group label{font-size:12px;font-weight:600;color:#374151}
+.form-group .hint{font-size:11px;color:#94a3b8}
+input[type=text],input[type=password],input[type=number],input[type=time],select,textarea{
+  padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;outline:none;
+  transition:border-color .2s;width:100%;background:#fff;color:#1f2937}
+input:focus,select:focus,textarea:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,.08)}
+textarea{resize:vertical;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:12px}
+.radio-group{display:flex;gap:16px;align-items:center}
+.radio-group label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:400;cursor:pointer}
+
+/* ===== Modal ===== */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:none;align-items:center;justify-content:center}
+.modal-backdrop.open{display:flex}
+.modal{background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);width:600px;max-width:94vw;max-height:90vh;overflow-y:auto;animation:slideUp .2s ease}
+.modal-wide{width:720px}
+@keyframes slideUp{from{transform:translateY(20px);opacity:0}to{transform:none;opacity:1}}
+.modal-header{padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between}
+.modal-header h3{font-size:16px;font-weight:600;color:#1e1b4b}
+.modal-close{background:none;border:none;cursor:pointer;font-size:20px;color:#94a3b8;line-height:1;padding:4px}
+.modal-close:hover{color:#1f2937}
+.modal-body{padding:20px 24px}
+.modal-footer{padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px}
+
+/* ===== Sub-tabs (cron mode) ===== */
+.subtabs{display:flex;border-bottom:2px solid #f1f5f9;margin-bottom:14px;gap:0}
+.subtab{padding:8px 16px;font-size:13px;cursor:pointer;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-2px;font-weight:500;transition:all .15s}
+.subtab:hover{color:#6366f1}
+.subtab.active{color:#6366f1;border-bottom-color:#6366f1;font-weight:600}
+
+/* ===== Cron presets ===== */
+.cron-presets{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.cron-preset{padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;background:#ede9fe;color:#5b21b6;transition:all .15s}
+.cron-preset:hover,.cron-preset.sel{background:#6366f1;color:#fff}
+
+/* ===== Headers dynamic list ===== */
+.header-row{display:flex;gap:6px;margin-bottom:6px;align-items:center}
+.header-row input{font-size:12px;padding:6px 10px}
+
+/* ===== Duration toggle ===== */
+.dur-toggle{display:flex;gap:0;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:10px;width:fit-content}
+.dur-opt{padding:6px 18px;font-size:12px;font-weight:600;cursor:pointer;background:#fff;color:#64748b;border:none;transition:all .15s}
+.dur-opt.active{background:#6366f1;color:#fff}
+.dur-disabled{background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;font-size:13px;color:#94a3b8}
+
+/* ===== Pulse ===== */
+.pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ===== Toast ===== */
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:10px;color:#fff;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.15);display:none;animation:fadeIn .2s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.toast-success{background:#10b981}.toast-error{background:#ef4444}.toast-info{background:#6366f1}.toast-warn{background:#f59e0b}
+
+/* ===== Mock badge ===== */
+.mock-badge{display:inline-block;padding:2px 8px;background:#fef3c7;color:#92400e;border-radius:99px;font-size:10px;font-weight:700;margin-left:8px}
+
+code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace}
+.divider{height:1px;background:#f1f5f9;margin:16px 0}
+.text-muted{color:#94a3b8;font-size:12px}
+
+/* ===== API tooltip (data-api hover) ===== */
+[data-api]{position:relative}
+[data-api]:hover::after{content:attr(data-api);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1e1b4b;color:#a5b4fc;font-size:10px;font-family:monospace;padding:4px 8px;border-radius:5px;white-space:nowrap;pointer-events:none;z-index:9999;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+[data-api]:hover::before{content:'';position:absolute;bottom:calc(100% + 2px);left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:#1e1b4b;pointer-events:none;z-index:9999}
+
+/* ===== Test result panel ===== */
+.test-panel{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;margin-top:12px}
+.test-panel-header{padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;font-size:12px;flex-wrap:wrap}
+.test-panel-body{padding:14px;font-family:'Cascadia Code','Fira Code',Consolas,monospace;font-size:11px;background:#0f172a;color:#94a3b8;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6}
+/* Live Stats Modal */
+.live-modal{position:fixed;inset:0;z-index:1100;display:flex;align-items:flex-start;justify-content:center;padding-top:40px}
+.live-modal-bg{position:absolute;inset:0;background:rgba(15,23,42,0.55);backdrop-filter:blur(2px)}
+.live-modal-box{position:relative;z-index:1;background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.25);width:900px;max-width:96vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden}
+.live-modal-header{padding:18px 24px 14px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.live-modal-title{font-size:16px;font-weight:700;color:#1e1b4b;flex:1}
+.live-badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.5px}
+.live-badge-on{background:#dcfce7;color:#166534;animation:pulseBg 2s infinite}
+.live-badge-off{background:#f1f5f9;color:#64748b}
+@keyframes pulseBg{0%,100%{background:#dcfce7}50%{background:#bbf7d0}}
+.live-stats-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;padding:16px 24px;background:#f8fafc;border-bottom:1px solid #e5e7eb;flex-shrink:0}
+.live-stat-card{background:#fff;border-radius:10px;padding:12px 10px;text-align:center;border:1px solid #e5e7eb}
+.live-stat-val{font-size:20px;font-weight:700;color:#1e1b4b;line-height:1.2}
+.live-stat-val.green{color:#059669}
+.live-stat-val.red{color:#dc2626}
+.live-stat-val.purple{color:#6366f1}
+.live-stat-label{font-size:10px;color:#94a3b8;margin-top:2px;letter-spacing:.3px}
+.live-log-area{flex:1;overflow-y:auto;min-height:0}
+.live-log-table{width:100%;border-collapse:collapse;font-size:12px}
+.live-log-table thead th{padding:8px 16px;text-align:left;background:#f8fafc;border-bottom:1px solid #e5e7eb;color:#64748b;font-weight:600;font-size:11px;position:sticky;top:0;z-index:1}
+.live-log-table tbody td{padding:6px 16px;border-bottom:1px solid #f1f5f9;white-space:nowrap}
+.live-log-table tbody tr:hover{background:#f8fafc}
+.live-log-row-ok td:first-child{color:#059669}
+.live-log-row-err td:first-child{color:#dc2626}
+.live-footer{padding:12px 24px;border-top:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;flex-shrink:0;background:#f8fafc}
+.live-elapsed{font-size:12px;color:#64748b;flex:1}
+.live-refresh-hint{font-size:11px;color:#94a3b8}
+</style>
+</head>
+<body>
+
+<!-- ========== SIDEBAR ========== -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <h1>LlmWarmer</h1>
+    <p>GPU 预热调度 · 管理后台</p>
+  </div>
+  <nav class="nav-section">
+    <div class="nav-label">配置</div>
+    <div class="nav-item active" data-page="endpoints" onclick="navTo('endpoints')">
+      <span class="icon">🖥️</span> 模型端点
+    </div>
+    <div class="nav-item" data-page="tasks" onclick="navTo('tasks')">
+      <span class="icon">⏰</span> 预热任务
+    </div>
+    <div class="nav-label" style="margin-top:8px">监控</div>
+    <div class="nav-item" data-page="executions" onclick="navTo('executions')">
+      <span class="icon">📈</span> 执行历史
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="token-label">服务地址</div>
+    <input type="text" id="apiBaseInput" placeholder="http://localhost:8090" oninput="saveBase(this.value)"/>
+    <button class="connect-btn" onclick="loadAll()">连接 / 刷新</button>
+    <div class="status-text">
+      <span class="status-dot off" id="dotEl"></span>
+      <span id="statusText">未连接</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ========== MAIN ========== -->
+<div class="main">
+  <div class="topbar">
+    <span class="topbar-title" id="topbarTitle">模型端点</span>
+    <div class="topbar-right">
+      <span id="mockBadge"></span>
+      <span id="syncTime"></span>
+      <button class="btn btn-neutral btn-sm" onclick="loadAll()">↻ 刷新</button>
+    </div>
+  </div>
+  <div class="content">
+
+    <!-- ====== PAGE: 模型端点 ====== -->
+    <div class="panel active" id="page-endpoints">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span style="font-size:14px;font-weight:600;color:#1e1b4b">共 <span id="endpointCount">0</span> 个端点</span>
+        </div>
+        <div class="toolbar-right">
+          <input type="text" id="endpointSearch" placeholder="搜索名称 / 地址..." style="width:210px" oninput="filterEndpoints()"/>
+          <button class="btn btn-primary" onclick="openEndpointModal()">+ 新增端点</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>名称</th><th>完整请求地址</th><th>方法</th>
+                <th>模型标签</th><th>自定义头</th><th>状态</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="endpointsTbody">
+              <tr class="empty-row"><td colspan="8">点击「连接 / 刷新」加载数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PAGE: 预热任务 ====== -->
+    <div class="panel" id="page-tasks">
+      <div class="stats-row" style="grid-template-columns:repeat(3,1fr)">
+        <div class="stat-card">
+          <div class="stat-label">⏰ 任务总数</div>
+          <div class="stat-val" id="statTaskTotal">-</div>
+          <div class="stat-sub">已配置调度任务</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span class="pulse"></span> 运行中</div>
+          <div class="stat-val" id="statTaskRunning">-</div>
+          <div class="stat-sub">当前执行中的任务</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">✅ 已启用</div>
+          <div class="stat-val" id="statTaskEnabled">-</div>
+          <div class="stat-sub">参与自动调度</div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span style="font-size:14px;font-weight:600;color:#1e1b4b">共 <span id="taskCount">0</span> 个任务</span>
+        </div>
+        <div class="toolbar-right">
+          <input type="text" id="taskSearch" placeholder="搜索任务名称..." style="width:200px" oninput="filterTasks()"/>
+          <button class="btn btn-primary" onclick="openTaskModal()">+ 新增任务</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>任务名称</th><th>模型端点</th><th>Cron</th>
+                <th>TPS</th><th>线程数</th><th>时长</th><th>启用</th><th>状态</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="tasksTbody">
+              <tr class="empty-row"><td colspan="10">点击「连接 / 刷新」加载数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ====== PAGE: 执行历史 ====== -->
+    <div class="panel" id="page-executions">
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr)">
+        <div class="stat-card">
+          <div class="stat-label">📊 总执行次数</div>
+          <div class="stat-val" id="statExecTotal">-</div>
+          <div class="stat-sub">历史记录</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">🔤 累计 Token 产出</div>
+          <div class="stat-val" id="statExecTokens">-</div>
+          <div class="stat-sub">所有成功请求合计</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">✅ 整体成功率</div>
+          <div class="stat-val" id="statExecSuccessRate">-</div>
+          <div class="stat-sub">成功请求 / 总请求</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label"><span class="pulse"></span> 进行中</div>
+          <div class="stat-val" id="statExecRunning">-</div>
+          <div class="stat-sub">RUNNING 状态</div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <select id="execFilterTask" style="width:180px" onchange="loadExecutions()">
+            <option value="">全部任务</option>
+          </select>
+          <select id="execLimit" style="width:110px" onchange="loadExecutions()">
+            <option value="20">最近 20 条</option>
+            <option value="50" selected>最近 50 条</option>
+            <option value="100">最近 100 条</option>
+          </select>
+        </div>
+        <div class="toolbar-right">
+          <button class="btn btn-neutral btn-sm" onclick="loadExecutions()">↻ 刷新历史</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>任务名称</th><th>开始时间</th><th>结束时间</th>
+                <th>总请求</th><th>成功（成功率）</th><th>失败</th><th>Token 产出</th><th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="executionsTbody">
+              <tr class="empty-row"><td colspan="9">点击「连接 / 刷新」加载数据</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ========== MODAL: 端点 ========== -->
+<div class="modal-backdrop" id="endpointModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="endpointModalTitle">新增模型端点</h3>
+      <button class="modal-close" onclick="closeModal('endpointModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <input type="hidden" id="epId"/>
+        <div class="form-group">
+          <label>端点名称 *</label>
+          <input type="text" id="epName" placeholder="例：Qwen-72B 生产节点"/>
+        </div>
+
+        <div class="form-grid form-grid-2" style="align-items:end">
+          <div class="form-group">
+            <label>HTTP 方法 *</label>
+            <div class="radio-group" style="margin-top:4px">
+              <label><input type="radio" name="epMethod" id="epMethodPost" value="POST" checked> POST</label>
+              <label><input type="radio" name="epMethod" id="epMethodGet" value="GET"> GET</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>模型名称标签</label>
+            <input type="text" id="epModelName" placeholder="qwen2.5-72b（可选，仅展示用）"/>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>完整请求地址 *</label>
+          <input type="text" id="epBaseUrl" placeholder="http://10.0.1.100:8080/v1/chat/completions"/>
+          <span class="hint">填写完整 URL，系统不会自动拼接路径</span>
+        </div>
+
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="epApiKey" placeholder="自动添加 Authorization: Bearer {key}（留空则不携带）"/>
+        </div>
+
+        <div class="form-group">
+          <label>自定义请求头</label>
+          <div id="headersContainer"></div>
+          <button type="button" class="btn btn-neutral btn-sm" style="margin-top:6px;width:fit-content" onclick="addHeader()">+ 添加请求头</button>
+          <span class="hint">如需覆盖 Content-Type 或添加 X-Api-Version 等头</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-neutral" onclick="closeModal('endpointModal')">取消</button>
+      <button class="btn btn-primary" data-api="POST /api/endpoints/create  |  POST /api/endpoints/update" onclick="saveEndpoint()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MODAL: 预热任务 ========== -->
+<div class="modal-backdrop" id="taskModal">
+  <div class="modal modal-wide">
+    <div class="modal-header">
+      <h3 id="taskModalTitle">新增预热任务</h3>
+      <button class="modal-close" onclick="closeModal('taskModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <input type="hidden" id="tkId"/>
+
+        <div class="form-grid form-grid-2">
+          <div class="form-group">
+            <label>任务名称 *</label>
+            <input type="text" id="tkName" placeholder="例：夜间 GPU 预热"/>
+          </div>
+          <div class="form-group">
+            <label>模型端点 *</label>
+            <select id="tkEndpointId"></select>
+          </div>
+        </div>
+
+        <!-- Cron 区域 -->
+        <div class="form-group" style="gap:0">
+          <label style="margin-bottom:8px">触发调度 *</label>
+          <div class="subtabs">
+            <div class="subtab active" id="cronTab1" onclick="setCronMode('point')">⏰ 定时触发</div>
+            <div class="subtab" id="cronTab2" onclick="setCronMode('window')">🕐 时间窗口</div>
+          </div>
+
+          <!-- 定时触发 -->
+          <div id="cronPanelPoint">
+            <div class="cron-presets">
+              <span class="cron-preset" onclick="setCron('0 0 22 * * ?',this)">每晚 22:00</span>
+              <span class="cron-preset" onclick="setCron('0 30 22 * * ?',this)">每晚 22:30</span>
+              <span class="cron-preset" onclick="setCron('0 0 23 * * ?',this)">每晚 23:00</span>
+              <span class="cron-preset" onclick="setCron('0 0 0 * * ?',this)">凌晨 0:00</span>
+              <span class="cron-preset" onclick="setCron('0 0 2 * * ?',this)">凌晨 2:00</span>
+              <span class="cron-preset" onclick="setCron('0 0 * * * ?',this)">每小时整点</span>
+              <span class="cron-preset" onclick="setCron('0 0 22 ? * MON-FRI',this)">工作日晚22:00</span>
+              <span class="cron-preset" onclick="setCron('0 0 0 ? * SAT,SUN',this)">周末凌晨</span>
+            </div>
+            <input type="text" id="tkCronExpr" placeholder="0 0 22 * * ?" oninput="clearCronPreset()"/>
+            <span class="hint" style="margin-top:4px;display:block">Spring 6字段 Cron：秒 分 时 日 月 周</span>
+          </div>
+
+          <!-- 时间窗口 -->
+          <div id="cronPanelWindow" style="display:none">
+            <div class="form-grid form-grid-2" style="margin-bottom:10px">
+              <div class="form-group">
+                <label>开始时间</label>
+                <input type="time" id="tkWindowStart" value="22:00" onchange="calcWindowCron()"/>
+              </div>
+              <div class="form-group">
+                <label>结束时间</label>
+                <input type="time" id="tkWindowEnd" value="06:00" onchange="calcWindowCron()"/>
+                <span class="hint">结束≤开始时视为次日（跨夜自动处理）</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>执行周期</label>
+              <select id="tkWindowFreq" onchange="calcWindowCron()">
+                <option value="daily">每天</option>
+                <option value="weekday">工作日（周一至周五）</option>
+                <option value="weekend">周末（周六、周日）</option>
+              </select>
+            </div>
+            <div style="margin-top:10px;padding:10px 12px;background:#ede9fe;border-radius:8px;font-size:12px;color:#5b21b6">
+              <strong>生成 Cron：</strong><span id="windowCronPreview" style="font-family:monospace">—</span>
+              <span style="margin-left:8px;color:#7c3aed">时长：<strong id="windowDurPreview">—</strong></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 并发参数 -->
+        <div class="form-grid form-grid-2">
+          <div class="form-group">
+            <label>TPS（请求/秒）*</label>
+            <input type="number" id="tkTps" value="2" min="1" max="1000"/>
+            <span class="hint">所有线程合计每秒请求数</span>
+          </div>
+          <div class="form-group">
+            <label>并发线程数 *</label>
+            <input type="number" id="tkThreadCount" value="2" min="1" max="100"/>
+            <span class="hint">最大同时在途请求数</span>
+          </div>
+        </div>
+
+        <!-- 持续时长 -->
+        <div class="form-group">
+          <label>持续时长</label>
+          <div class="dur-toggle">
+            <button type="button" class="dur-opt active" id="durOptFixed" onclick="setDurMode('fixed')">固定时长</button>
+            <button type="button" class="dur-opt" id="durOptForever" onclick="setDurMode('forever')">长期运行</button>
+          </div>
+          <div id="durFixed">
+            <input type="number" id="tkDurationSeconds" value="28800" min="60"/>
+            <span class="hint">单位：秒　3600=1h　28800=8h　86400=24h</span>
+          </div>
+          <div id="durForever" style="display:none">
+            <div class="dur-disabled">∞ 长期运行，直到手动点击「停止」</div>
+          </div>
+        </div>
+
+        <!-- 请求体 -->
+        <div class="form-group">
+          <label>自定义请求体 *</label>
+          <textarea id="tkRequestBody" rows="6" placeholder='{"model":"qwen2.5-72b","messages":[{"role":"user","content":"请写一篇关于AI发展的5000字论文"}],"max_tokens":2048,"stream":false}'></textarea>
+          <span class="hint">填写完整 JSON 请求体，会原样发送；max_tokens 建议设大以提升 token 产出量</span>
+          <div style="display:flex;justify-content:flex-end;margin-top:8px">
+            <button type="button" class="btn btn-info btn-sm" id="testBtn"
+                    data-api="POST /api/test/request"
+                    onclick="testRequest()">🧪 测试请求</button>
+          </div>
+          <!-- 测试结果面板 -->
+          <div class="test-panel" id="testResultPanel" style="display:none">
+            <div class="test-panel-header">
+              <span id="testStatusIcon"></span>
+              <span id="testStatusText"></span>
+              <span id="testLatency" style="color:#64748b"></span>
+              <span id="testTokens" style="margin-left:auto"></span>
+            </div>
+            <div class="test-panel-body" id="testResponseBody"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-neutral" onclick="closeModal('taskModal')">取消</button>
+      <button class="btn btn-primary" data-api="POST /api/tasks/create  |  POST /api/tasks/update" onclick="saveTask()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MODAL: 确认删除 ========== -->
+<div class="modal-backdrop" id="confirmModal">
+  <div class="modal" style="width:420px">
+    <div class="modal-header">
+      <h3>确认操作</h3>
+      <button class="modal-close" onclick="closeModal('confirmModal')">×</button>
+    </div>
+    <div class="modal-body">
+      <p id="confirmMsg" style="font-size:14px;color:#374151;line-height:1.6"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-neutral" onclick="closeModal('confirmModal')">取消</button>
+      <button class="btn btn-danger" id="confirmOkBtn">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== LIVE STATS MODAL ========== -->
+<div class="live-modal" id="liveModal" style="display:none">
+  <div class="live-modal-bg" onclick="closeLiveModal()"></div>
+  <div class="live-modal-box">
+    <div class="live-modal-header">
+      <div class="live-modal-title" id="liveModalTitle">实时监控</div>
+      <span class="live-badge live-badge-on" id="liveBadge">● LIVE</span>
+      <button class="btn btn-neutral btn-sm" onclick="closeLiveModal()" style="margin-left:8px">✕ 关闭</button>
+    </div>
+    <div class="live-stats-grid">
+      <div class="live-stat-card">
+        <div class="live-stat-val" id="lsTotal">—</div>
+        <div class="live-stat-label">总请求数</div>
+      </div>
+      <div class="live-stat-card">
+        <div class="live-stat-val green" id="lsSuccess">—</div>
+        <div class="live-stat-label">成功</div>
+      </div>
+      <div class="live-stat-card">
+        <div class="live-stat-val red" id="lsFail">—</div>
+        <div class="live-stat-label">失败</div>
+      </div>
+      <div class="live-stat-card">
+        <div class="live-stat-val purple" id="lsRate">—</div>
+        <div class="live-stat-label">成功率</div>
+      </div>
+      <div class="live-stat-card">
+        <div class="live-stat-val" id="lsTps">—</div>
+        <div class="live-stat-label">当前 TPS</div>
+      </div>
+      <div class="live-stat-card">
+        <div class="live-stat-val purple" id="lsTokens">—</div>
+        <div class="live-stat-label">累计 Tokens</div>
+      </div>
+    </div>
+    <div class="live-log-area">
+      <table class="live-log-table">
+        <thead>
+          <tr>
+            <th style="width:28px"></th>
+            <th>时间</th>
+            <th>延迟</th>
+            <th>Tokens</th>
+            <th>错误信息</th>
+          </tr>
+        </thead>
+        <tbody id="liveLogBody">
+          <tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px">等待数据...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="live-footer">
+      <span class="live-elapsed" id="liveElapsed"></span>
+      <span class="live-refresh-hint">每秒自动刷新 · 最近 50 条记录</span>
+      <button class="btn btn-neutral btn-sm" data-api="GET /api/tasks/live-stats?id={id}" onclick="refreshLiveStats()">↺ 刷新</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== TOAST ========== -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== 模拟数据 =====
+const MOCK_ENDPOINTS = [
+  {id:1, name:'Qwen-72B 生产节点', baseUrl:'http://10.0.1.100:8080/v1/chat/completions', modelName:'qwen2.5-72b-instruct', httpMethod:'POST', headerCount:2, enabled:1, createdAt:'2026-05-20 10:00:00', updatedAt:'2026-05-27 14:30:00'},
+  {id:2, name:'DeepSeek-V3 主节点', baseUrl:'http://10.0.2.50:8080/v1/chat/completions', modelName:'deepseek-v3', httpMethod:'POST', headerCount:1, enabled:1, createdAt:'2026-05-21 09:00:00', updatedAt:'2026-05-25 16:00:00'},
+  {id:3, name:'Llama-3.1-70B 备节点', baseUrl:'http://10.0.3.20:9000/v1/chat/completions', modelName:'meta-llama-3.1-70b', httpMethod:'POST', headerCount:0, enabled:0, createdAt:'2026-05-22 11:00:00', updatedAt:'2026-05-22 11:00:00'},
+  {id:4, name:'业务健康探针（GET）', baseUrl:'http://10.0.1.100:8080/health', modelName:'—', httpMethod:'GET', headerCount:0, enabled:1, createdAt:'2026-05-23 08:00:00', updatedAt:'2026-05-23 08:00:00'},
+];
+
+const MOCK_TASKS = [
+  {id:1, name:'夜间 GPU 预热 - Qwen', endpointId:1, endpointName:'Qwen-72B 生产节点', cronExpr:'0 0 22 * * ?', tps:5, threadCount:5, durationSeconds:28800, requestBody:'{"model":"qwen2.5-72b-instruct","messages":[{"role":"user","content":"请写一篇关于人工智能在金融领域应用的深度分析报告，不少于5000字"}],"max_tokens":4096,"stream":false}', enabled:1, status:'RUNNING'},
+  {id:2, name:'凌晨深度预热 - DS', endpointId:2, endpointName:'DeepSeek-V3 主节点', cronExpr:'0 0 23 * * MON-FRI', tps:3, threadCount:3, durationSeconds:21600, requestBody:'{"model":"deepseek-v3","messages":[{"role":"user","content":"用Python实现一个完整的量化交易回测框架，包含数据获取、策略回测、风险评估和报告生成"}],"max_tokens":4096,"stream":false}', enabled:1, status:'IDLE'},
+  {id:3, name:'周末全天长期预热', endpointId:1, endpointName:'Qwen-72B 生产节点', cronExpr:'0 0 0 ? * SAT,SUN', tps:8, threadCount:8, durationSeconds:-1, requestBody:'{"model":"qwen2.5-72b-instruct","messages":[{"role":"user","content":"详细分析当前全球宏观经济形势，包括美联储货币政策、中国经济复苏、新兴市场风险等核心议题，给出专业投研观点"}],"max_tokens":4096,"stream":false}', enabled:1, status:'IDLE'},
+  {id:4, name:'测试任务（已禁用）', endpointId:3, endpointName:'Llama-3.1-70B 备节点', cronExpr:'0 0 3 * * ?', tps:1, threadCount:1, durationSeconds:3600, requestBody:'{"model":"meta-llama-3.1-70b","messages":[{"role":"user","content":"Hello, world!"}],"max_tokens":100}', enabled:0, status:'IDLE'},
+];
+
+const MOCK_EXECUTIONS = [
+  {id:1, taskId:1, taskName:'夜间 GPU 预热 - Qwen', startTime:'2026-05-28 22:00:01', endTime:null, totalRequests:63480, successCount:63201, failCount:279, totalTokens:258739608, status:'RUNNING'},
+  {id:2, taskId:2, taskName:'凌晨深度预热 - DS', startTime:'2026-05-28 23:00:00', endTime:'2026-05-29 05:00:04', totalRequests:64800, successCount:64531, failCount:269, totalTokens:264169600, status:'SUCCESS'},
+  {id:3, taskId:3, taskName:'周末全天长期预热', startTime:'2026-05-25 00:00:00', endTime:'2026-05-25 20:47:13', totalRequests:2073600, successCount:2060480, failCount:13120, totalTokens:4235703680, status:'STOPPED'},
+  {id:4, taskId:1, taskName:'夜间 GPU 预热 - Qwen', startTime:'2026-05-27 22:00:02', endTime:'2026-05-28 06:00:07', totalRequests:144000, successCount:143120, failCount:880, totalTokens:584985600, status:'SUCCESS'},
+  {id:5, taskId:2, taskName:'凌晨深度预热 - DS', startTime:'2026-05-27 23:00:01', endTime:'2026-05-28 05:00:05', totalRequests:64800, successCount:64100, failCount:700, totalTokens:261787200, status:'SUCCESS'},
+  {id:6, taskId:1, taskName:'夜间 GPU 预热 - Qwen', startTime:'2026-05-26 22:00:01', endTime:'2026-05-27 06:00:03', totalRequests:144000, successCount:142800, failCount:1200, totalTokens:583137600, status:'SUCCESS'},
+  {id:7, taskId:4, taskName:'测试任务（已禁用）', startTime:'2026-05-24 03:00:00', endTime:'2026-05-24 04:00:02', totalRequests:3600, successCount:3480, failCount:120, totalTokens:348000, status:'SUCCESS'},
+];
+
+// ===== 全局状态 =====
+let allEndpoints = [];
+let allTasks     = [];
+let allExecutions = [];
+let isMock = false;
+
+const PAGE_TITLES = {endpoints:'模型端点', tasks:'预热任务', executions:'执行历史'};
+
+// ===== 工具 =====
+function base() {
+  const v = document.getElementById('apiBaseInput').value.trim();
+  return v.endsWith('/') ? v.slice(0,-1) : v;
+}
+function saveBase(v) { localStorage.setItem('wm_base', v); }
+
+async function api(method, path, body) {
+  const opts = {method, headers:{'Content-Type':'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(base() + path, opts);
+  const json = await res.json();
+  if (json.code !== 0) throw new Error(json.message || '请求失败');
+  return json.data;
+}
+
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast toast-${type}`;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 2800);
+}
+
+function setStatus(ok, mock) {
+  isMock = !!mock;
+  const dot = document.getElementById('dotEl');
+  dot.className = `status-dot ${mock ? 'mock' : ok ? 'on' : 'off'}`;
+  document.getElementById('statusText').textContent = mock ? '模拟数据' : ok ? '已连接' : '未连接';
+  document.getElementById('mockBadge').innerHTML = mock ? '<span class="mock-badge">MOCK</span>' : '';
+}
+
+function navTo(page) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+  document.getElementById(`page-${page}`).classList.add('active');
+  document.getElementById('topbarTitle').textContent = PAGE_TITLES[page];
+  if (page === 'executions') loadExecutions();
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function fmt(n) {
+  if (n == null) return '-';
+  if (n >= 1e8) return (n/1e8).toFixed(2)+'亿';
+  if (n >= 1e4) return (n/1e4).toFixed(1)+'万';
+  return n.toLocaleString();
+}
+function fmtTime(s) { return s ? s.replace('T',' ').slice(0,19) : '-'; }
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ===== 加载全部 =====
+async function loadAll() {
+  try {
+    const [eps, tasks] = await Promise.all([
+      api('GET', '/api/endpoints/list'),
+      api('GET', '/api/tasks/list'),
+    ]);
+    allEndpoints = eps || [];
+    allTasks = tasks || [];
+    renderEndpoints(allEndpoints);
+    renderTasks(allTasks);
+    updateTaskStats(allTasks);
+    populateTaskFilter(allTasks);
+    setStatus(true, false);
+    document.getElementById('syncTime').textContent = '刷新于 ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    loadMockData();
+  }
+}
+
+function loadMockData() {
+  allEndpoints  = MOCK_ENDPOINTS;
+  allTasks      = MOCK_TASKS;
+  allExecutions = MOCK_EXECUTIONS;
+  renderEndpoints(allEndpoints);
+  renderTasks(allTasks);
+  updateTaskStats(allTasks);
+  populateTaskFilter(allTasks);
+  updateExecStats(allExecutions);
+  renderExecutions(allExecutions);
+  setStatus(false, true);
+  document.getElementById('syncTime').textContent = '模拟数据预览';
+  toast('无法连接服务，已加载模拟数据', 'warn');
+}
+
+// ===== 端点 =====
+function renderEndpoints(list) {
+  document.getElementById('endpointCount').textContent = list.length;
+  const tbody = document.getElementById('endpointsTbody');
+  if (!list.length) { tbody.innerHTML='<tr class="empty-row"><td colspan="8">暂无数据</td></tr>'; return; }
+  const methodTag = m => m==='GET'
+    ? '<span class="tag tag-cyan">GET</span>'
+    : '<span class="tag tag-blue">POST</span>';
+  tbody.innerHTML = list.map(e => `
+    <tr>
+      <td><code>${e.id}</code></td>
+      <td><strong>${esc(e.name)}</strong></td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.baseUrl)}">
+        <code style="font-size:11px;background:none;padding:0;color:#6366f1">${esc(e.baseUrl)}</code>
+      </td>
+      <td>${methodTag(e.httpMethod||'POST')}</td>
+      <td>${e.modelName ? `<span class="tag tag-purple">${esc(e.modelName)}</span>` : '<span class="text-muted">—</span>'}</td>
+      <td>${(e.headerCount||0) > 0 ? `<span class="tag tag-orange">${e.headerCount} 个</span>` : '<span class="text-muted">—</span>'}</td>
+      <td>${e.enabled===1?'<span class="tag tag-green">启用</span>':'<span class="tag tag-red">禁用</span>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-neutral btn-sm btn-icon" data-api="GET /api/endpoints/detail?id=${e.id}" onclick="editEndpoint(${e.id})" title="编辑">✏️</button>
+        <button class="btn btn-${e.enabled===1?'warning':'success'} btn-sm" data-api="POST /api/endpoints/update" onclick="toggleEndpoint(${e.id},${e.enabled})">${e.enabled===1?'禁用':'启用'}</button>
+        <button class="btn btn-danger btn-sm btn-icon" data-api="POST /api/endpoints/delete?id=${e.id}" onclick="delEndpoint(${e.id},'${esc(e.name)}')" title="删除">🗑</button>
+      </td>
+    </tr>`).join('');
+}
+
+function filterEndpoints() {
+  const q = document.getElementById('endpointSearch').value.toLowerCase();
+  renderEndpoints(q ? allEndpoints.filter(e => e.name.toLowerCase().includes(q) || e.baseUrl.toLowerCase().includes(q)) : allEndpoints);
+}
+
+function openEndpointModal(ep) {
+  document.getElementById('epId').value = ep ? ep.id : '';
+  document.getElementById('epName').value = ep ? ep.name : '';
+  document.getElementById('epBaseUrl').value = ep ? ep.baseUrl : '';
+  document.getElementById('epModelName').value = ep ? (ep.modelName||'') : '';
+  document.getElementById('epApiKey').value = '';
+  document.querySelector(`input[name="epMethod"][value="${ep && ep.httpMethod ? ep.httpMethod : 'POST'}"]`).checked = true;
+  document.getElementById('endpointModalTitle').textContent = ep ? '编辑模型端点' : '新增模型端点';
+  clearHeaders();
+  openModal('endpointModal');
+}
+
+function editEndpoint(id) {
+  const ep = allEndpoints.find(e => e.id === id);
+  if (ep) openEndpointModal(ep);
+}
+
+async function saveEndpoint() {
+  const id = document.getElementById('epId').value;
+  const method = document.querySelector('input[name="epMethod"]:checked')?.value || 'POST';
+  const headers = getHeadersJson();
+  const body = {
+    name: document.getElementById('epName').value.trim(),
+    baseUrl: document.getElementById('epBaseUrl').value.trim(),
+    modelName: document.getElementById('epModelName').value.trim() || undefined,
+    apiKey: document.getElementById('epApiKey').value.trim() || undefined,
+    httpMethod: method,
+    requestHeaders: headers || undefined,
+  };
+  if (!body.name || !body.baseUrl) { toast('请填写必填项','error'); return; }
+  if (isMock) { toast('模拟模式：操作不会持久化，请连接服务后操作', 'warn'); closeModal('endpointModal'); return; }
+  try {
+    if (id) { await api('POST', '/api/endpoints/update', {...body, id: +id}); toast('端点已更新'); }
+    else { await api('POST', '/api/endpoints/create', body); toast('端点已创建'); }
+    closeModal('endpointModal'); await loadAll();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function toggleEndpoint(id, cur) {
+  if (isMock) { toast('模拟模式，请连接服务后操作','warn'); return; }
+  try {
+    await api('POST', '/api/endpoints/update', {id, enabled: cur===1?0:1});
+    toast(cur===1?'已禁用':'已启用'); await loadAll();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function delEndpoint(id, name) {
+  document.getElementById('confirmMsg').textContent = `确定要删除端点「${name}」吗？`;
+  document.getElementById('confirmOkBtn').onclick = async () => {
+    if (isMock) { toast('模拟模式，请连接服务后操作','warn'); closeModal('confirmModal'); return; }
+    try { await api('POST', `/api/endpoints/delete?id=${id}`); closeModal('confirmModal'); toast('已删除'); await loadAll(); }
+    catch(e) { toast(e.message,'error'); }
+  };
+  openModal('confirmModal');
+}
+
+// ===== 自定义请求头 =====
+function addHeader(key='', val='') {
+  const id = 'hr' + Date.now() + Math.random().toString(36).slice(2,6);
+  const div = document.createElement('div');
+  div.className = 'header-row';
+  div.id = id;
+  div.innerHTML = `
+    <input type="text" placeholder="Header 名称" value="${esc(key)}" style="flex:1" class="hr-key"/>
+    <input type="text" placeholder="值" value="${esc(val)}" style="flex:2" class="hr-val"/>
+    <button type="button" class="btn btn-danger btn-icon btn-sm" onclick="document.getElementById('${id}').remove()">×</button>`;
+  document.getElementById('headersContainer').appendChild(div);
+}
+function clearHeaders() { document.getElementById('headersContainer').innerHTML = ''; }
+function getHeadersJson() {
+  const obj = {};
+  document.querySelectorAll('#headersContainer .header-row').forEach(row => {
+    const k = row.querySelector('.hr-key').value.trim();
+    const v = row.querySelector('.hr-val').value.trim();
+    if (k) obj[k] = v;
+  });
+  return Object.keys(obj).length ? JSON.stringify(obj) : null;
+}
+
+// ===== 任务 =====
+function updateTaskStats(list) {
+  document.getElementById('statTaskTotal').textContent = list.length;
+  document.getElementById('statTaskRunning').textContent = list.filter(t=>t.status==='RUNNING').length;
+  document.getElementById('statTaskEnabled').textContent = list.filter(t=>t.enabled===1).length;
+}
+function populateTaskFilter(list) {
+  const sel = document.getElementById('execFilterTask');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部任务</option>' + list.map(t=>`<option value="${t.id}" ${cur==t.id?'selected':''}>${esc(t.name)}</option>`).join('');
+}
+
+function renderTasks(list) {
+  document.getElementById('taskCount').textContent = list.length;
+  const tbody = document.getElementById('tasksTbody');
+  if (!list.length) { tbody.innerHTML='<tr class="empty-row"><td colspan="10">暂无数据</td></tr>'; return; }
+  tbody.innerHTML = list.map(t => {
+    const running = t.status === 'RUNNING';
+    const durLabel = t.durationSeconds === -1 ? '<span class="tag tag-orange">∞ 长期</span>' : fmtDur(t.durationSeconds);
+    const statusTag = running
+      ? `<span class="tag tag-green"><span class="pulse" style="margin-right:4px"></span>运行中</span>`
+      : `<span class="tag tag-gray">空闲</span>`;
+    return `<tr>
+      <td><code>${t.id}</code></td>
+      <td><strong>${esc(t.name)}</strong></td>
+      <td><span class="tag tag-purple">${esc(t.endpointName||t.endpointId)}</span></td>
+      <td><code style="font-size:11px">${esc(t.cronExpr)}</code></td>
+      <td>${t.tps}</td><td>${t.threadCount}</td>
+      <td>${durLabel}</td>
+      <td>${t.enabled===1?'<span class="tag tag-green">是</span>':'<span class="tag tag-gray">否</span>'}</td>
+      <td>${statusTag}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-neutral btn-sm btn-icon" data-api="GET /api/tasks/detail?id=${t.id}" onclick="editTask(${t.id})" title="编辑">✏️</button>
+        ${running
+          ? `<button class="btn btn-warning btn-sm" data-api="POST /api/tasks/stop?id=${t.id}" onclick="stopTask(${t.id})">⏹ 停止</button>
+             <button class="btn btn-sm" style="background:#6366f1;color:#fff" data-api="GET /api/tasks/live-stats?id=${t.id}" onclick="openLiveModal(${t.id},'${esc(t.name)}')">📊 实时</button>`
+          : `<button class="btn btn-success btn-sm" data-api="POST /api/tasks/trigger?id=${t.id}" onclick="triggerTask(${t.id})">▶ 触发</button>`}
+        <button class="btn btn-danger btn-sm btn-icon" data-api="POST /api/tasks/delete?id=${t.id}" onclick="delTask(${t.id},'${esc(t.name)}')" title="删除">🗑</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function fmtDur(s) {
+  if (!s || s < 0) return '∞';
+  if (s >= 3600) return (s/3600).toFixed(1) + 'h';
+  if (s >= 60) return Math.round(s/60) + 'min';
+  return s + 's';
+}
+
+function filterTasks() {
+  const q = document.getElementById('taskSearch').value.toLowerCase();
+  renderTasks(q ? allTasks.filter(t=>t.name.toLowerCase().includes(q)) : allTasks);
+}
+
+function openTaskModal(task) {
+  document.getElementById('tkId').value = task ? task.id : '';
+  document.getElementById('tkName').value = task ? task.name : '';
+  document.getElementById('tkTps').value = task ? task.tps : 2;
+  document.getElementById('tkThreadCount').value = task ? task.threadCount : 2;
+  document.getElementById('tkRequestBody').value = task ? (task.requestBody||'') : '';
+  document.getElementById('taskModalTitle').textContent = task ? '编辑预热任务' : '新增预热任务';
+
+  // cron
+  setCronMode('point');
+  document.getElementById('tkCronExpr').value = task ? task.cronExpr : '';
+  document.querySelectorAll('.cron-preset').forEach(el=>el.classList.remove('sel'));
+
+  // duration
+  if (task && task.durationSeconds === -1) {
+    setDurMode('forever');
+  } else {
+    setDurMode('fixed');
+    document.getElementById('tkDurationSeconds').value = task ? task.durationSeconds : 28800;
+  }
+
+  // endpoint select
+  const sel = document.getElementById('tkEndpointId');
+  sel.innerHTML = allEndpoints.filter(e=>e.enabled===1).map(e=>
+    `<option value="${e.id}" ${task&&task.endpointId===e.id?'selected':''}>${esc(e.name)}</option>`
+  ).join('');
+  if (!sel.innerHTML) sel.innerHTML = '<option value="">暂无可用端点</option>';
+  openModal('taskModal');
+}
+
+function editTask(id) {
+  const t = allTasks.find(t=>t.id===id);
+  if (t) openTaskModal(t);
+}
+
+async function saveTask() {
+  const id = document.getElementById('tkId').value;
+  const forever = document.getElementById('durOptForever').classList.contains('active');
+  const body = {
+    name: document.getElementById('tkName').value.trim(),
+    endpointId: +document.getElementById('tkEndpointId').value,
+    cronExpr: document.getElementById('tkCronExpr').value.trim(),
+    tps: +document.getElementById('tkTps').value,
+    threadCount: +document.getElementById('tkThreadCount').value,
+    durationSeconds: forever ? -1 : +document.getElementById('tkDurationSeconds').value,
+    requestBody: document.getElementById('tkRequestBody').value.trim(),
+  };
+  if (!body.name || !body.endpointId || !body.cronExpr || !body.requestBody) { toast('请填写必填项','error'); return; }
+  if (isMock) { toast('模拟模式：操作不会持久化，请连接服务后操作', 'warn'); closeModal('taskModal'); return; }
+  try {
+    if (id) { await api('POST', '/api/tasks/update', {...body, id: +id}); toast('任务已更新'); }
+    else { await api('POST', '/api/tasks/create', body); toast('任务已创建'); }
+    closeModal('taskModal'); await loadAll();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function triggerTask(id) {
+  if (isMock) { toast('模拟模式，请连接服务后操作','warn'); return; }
+  try { await api('POST', `/api/tasks/trigger?id=${id}`); toast('任务已触发'); await loadAll(); }
+  catch(e) { toast(e.message,'error'); }
+}
+
+async function stopTask(id) {
+  if (isMock) { toast('模拟模式，请连接服务后操作','warn'); return; }
+  try { await api('POST', `/api/tasks/stop?id=${id}`); toast('任务已停止'); await loadAll(); }
+  catch(e) { toast(e.message,'error'); }
+}
+
+function delTask(id, name) {
+  document.getElementById('confirmMsg').textContent = `确定要删除任务「${name}」吗？运行中的任务无法删除。`;
+  document.getElementById('confirmOkBtn').onclick = async () => {
+    if (isMock) { toast('模拟模式，请连接服务后操作','warn'); closeModal('confirmModal'); return; }
+    try { await api('POST', `/api/tasks/delete?id=${id}`); closeModal('confirmModal'); toast('已删除'); await loadAll(); }
+    catch(e) { toast(e.message,'error'); }
+  };
+  openModal('confirmModal');
+}
+
+// ===== 执行历史 =====
+async function loadExecutions() {
+  if (isMock) { renderExecutions(allExecutions); updateExecStats(allExecutions); return; }
+  const taskId = document.getElementById('execFilterTask').value;
+  const limit = document.getElementById('execLimit').value;
+  const qs = new URLSearchParams();
+  if (taskId) qs.set('taskId', taskId);
+  qs.set('limit', limit);
+  try {
+    allExecutions = await api('GET', '/api/executions?' + qs) || [];
+    renderExecutions(allExecutions); updateExecStats(allExecutions);
+  } catch(e) { toast('加载失败: ' + e.message, 'error'); }
+}
+
+function updateExecStats(list) {
+  document.getElementById('statExecTotal').textContent = list.length;
+  const totalTokens = list.reduce((s,e)=>s+(e.totalTokens||0),0);
+  document.getElementById('statExecTokens').textContent = fmt(totalTokens);
+  const totalReq = list.reduce((s,e)=>s+(e.totalRequests||0),0);
+  const totalSuc = list.reduce((s,e)=>s+(e.successCount||0),0);
+  document.getElementById('statExecSuccessRate').textContent = totalReq>0 ? (totalSuc/totalReq*100).toFixed(1)+'%' : '-';
+  document.getElementById('statExecRunning').textContent = list.filter(e=>e.status==='RUNNING').length;
+}
+
+function renderExecutions(list) {
+  const taskId = document.getElementById('execFilterTask').value;
+  const filtered = taskId ? list.filter(e => e.taskId == taskId) : list;
+  const tbody = document.getElementById('executionsTbody');
+  if (!filtered.length) { tbody.innerHTML='<tr class="empty-row"><td colspan="9">暂无数据</td></tr>'; return; }
+  const stag = s => ({
+    RUNNING: `<span class="tag tag-blue"><span class="pulse" style="margin-right:4px"></span>运行中</span>`,
+    SUCCESS: `<span class="tag tag-green">成功</span>`,
+    STOPPED: `<span class="tag tag-yellow">已停止</span>`,
+    FAILED:  `<span class="tag tag-red">失败</span>`,
+  }[s] || `<span class="tag tag-gray">${s}</span>`);
+  tbody.innerHTML = filtered.map(e => {
+    const rate = e.totalRequests>0 ? (e.successCount/e.totalRequests*100).toFixed(1)+'%' : '-';
+    return `<tr>
+      <td><code>${e.id}</code></td>
+      <td>${esc(e.taskName||e.taskId)}</td>
+      <td style="white-space:nowrap;font-size:12px">${fmtTime(e.startTime)}</td>
+      <td style="white-space:nowrap;font-size:12px">${fmtTime(e.endTime)}</td>
+      <td>${(e.totalRequests||0).toLocaleString()}</td>
+      <td style="color:#10b981;font-weight:600">${(e.successCount||0).toLocaleString()} <span style="color:#94a3b8;font-weight:400;font-size:12px">(${rate})</span></td>
+      <td style="color:${(e.failCount||0)>0?'#ef4444':'#94a3b8'}">${(e.failCount||0).toLocaleString()}</td>
+      <td style="font-weight:700;color:#6366f1">${fmt(e.totalTokens)}</td>
+      <td>${stag(e.status)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ===== Cron helpers =====
+function setCronMode(mode) {
+  const isPoint = mode === 'point';
+  document.getElementById('cronTab1').classList.toggle('active', isPoint);
+  document.getElementById('cronTab2').classList.toggle('active', !isPoint);
+  document.getElementById('cronPanelPoint').style.display = isPoint ? '' : 'none';
+  document.getElementById('cronPanelWindow').style.display = isPoint ? 'none' : '';
+  if (!isPoint) calcWindowCron();
+}
+
+function setCron(expr, el) {
+  document.getElementById('tkCronExpr').value = expr;
+  document.querySelectorAll('.cron-preset').forEach(e=>e.classList.remove('sel'));
+  el.classList.add('sel');
+}
+function clearCronPreset() { document.querySelectorAll('.cron-preset').forEach(e=>e.classList.remove('sel')); }
+
+function calcWindowCron() {
+  const start = document.getElementById('tkWindowStart').value || '22:00';
+  const end   = document.getElementById('tkWindowEnd').value   || '06:00';
+  const freq  = document.getElementById('tkWindowFreq').value;
+  const [sh,sm] = start.split(':').map(Number);
+  const [eh,em] = end.split(':').map(Number);
+
+  const dayPart = {daily:'*', weekday:'MON-FRI', weekend:'SAT,SUN'}[freq] || '*';
+  const cron = `0 ${sm} ${sh} ? * ${dayPart}`;
+  document.getElementById('tkCronExpr').value = cron;
+  document.getElementById('windowCronPreview').textContent = cron;
+
+  let startTotal = sh*60+sm, endTotal = eh*60+em;
+  if (endTotal <= startTotal) endTotal += 24*60;
+  const durSec = (endTotal - startTotal) * 60;
+  document.getElementById('windowDurPreview').textContent = fmtDur(durSec);
+  document.getElementById('tkDurationSeconds').value = durSec;
+  setDurMode('fixed');
+}
+
+// ===== Duration helpers =====
+function setDurMode(mode) {
+  const fixed = mode === 'fixed';
+  document.getElementById('durOptFixed').classList.toggle('active', fixed);
+  document.getElementById('durOptForever').classList.toggle('active', !fixed);
+  document.getElementById('durFixed').style.display   = fixed ? '' : 'none';
+  document.getElementById('durForever').style.display = fixed ? 'none' : '';
+}
+
+// ===== Live Stats =====
+let liveTaskId = null;
+let liveTaskName = '';
+let liveTimer = null;
+let liveMockCounter = 0;
+
+function openLiveModal(taskId, taskName) {
+  liveTaskId = taskId;
+  liveTaskName = taskName;
+  liveMockCounter = 0;
+  document.getElementById('liveModalTitle').textContent = '实时监控 — ' + taskName;
+  document.getElementById('liveModal').style.display = 'flex';
+  document.getElementById('liveLogBody').innerHTML =
+    '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:24px">等待数据...</td></tr>';
+  refreshLiveStats();
+  liveTimer = setInterval(refreshLiveStats, 1000);
+}
+
+function closeLiveModal() {
+  clearInterval(liveTimer);
+  liveTimer = null;
+  liveTaskId = null;
+  document.getElementById('liveModal').style.display = 'none';
+}
+
+async function refreshLiveStats() {
+  if (!liveTaskId) return;
+  if (isMock) { renderLiveStats(buildMockLiveStats()); return; }
+  try {
+    const data = await api('GET', `/api/tasks/live-stats?id=${liveTaskId}`);
+    renderLiveStats(data);
+  } catch(e) { /* keep showing last data */ }
+}
+
+function buildMockLiveStats() {
+  liveMockCounter++;
+  const total = 63480 + liveMockCounter * 5;
+  const fail  = 279 + Math.floor(liveMockCounter * 0.02);
+  const success = total - fail;
+  const elapsed = 4 * 3600 * 1000 + liveMockCounter * 1000;
+  const calls = [];
+  const now = new Date();
+  for (let i = 0; i < Math.min(liveMockCounter, 50); i++) {
+    const t = new Date(now - i * 1000);
+    const hh = String(t.getHours()).padStart(2,'0');
+    const mm = String(t.getMinutes()).padStart(2,'0');
+    const ss = String(t.getSeconds()).padStart(2,'0');
+    const ok = Math.random() > 0.04;
+    calls.push({time:`${hh}:${mm}:${ss}`, success:ok,
+      latencyMs: ok ? 1600+Math.floor(Math.random()*800) : 0,
+      tokens: ok ? 900+Math.floor(Math.random()*300) : 0,
+      error: ok ? null : 'connect timed out'});
+  }
+  return {running:true, totalRequests:total, successCount:success, failCount:fail,
+    successRate: Math.round(success/total*1000)/10,
+    totalTokens: 258739608 + liveMockCounter * 4800,
+    elapsedMs: elapsed, currentTps: 4.8 + (Math.random()-0.5)*0.4,
+    recentCalls: calls};
+}
+
+function renderLiveStats(d) {
+  const badge = document.getElementById('liveBadge');
+  badge.className = 'live-badge ' + (d.running ? 'live-badge-on' : 'live-badge-off');
+  badge.textContent = d.running ? '● LIVE' : '■ 已停止';
+
+  document.getElementById('lsTotal').textContent   = fmt(d.totalRequests);
+  document.getElementById('lsSuccess').textContent = fmt(d.successCount);
+  document.getElementById('lsFail').textContent    = fmt(d.failCount);
+  document.getElementById('lsRate').textContent    = d.successRate + '%';
+  document.getElementById('lsTps').textContent     = (d.currentTps||0).toFixed(1) + '/s';
+  document.getElementById('lsTokens').textContent  = fmt(d.totalTokens);
+
+  const sec  = Math.floor((d.elapsedMs||0) / 1000);
+  const hh   = String(Math.floor(sec/3600)).padStart(2,'0');
+  const mm   = String(Math.floor(sec%3600/60)).padStart(2,'0');
+  const ss   = String(sec%60).padStart(2,'0');
+  document.getElementById('liveElapsed').textContent = `已运行 ${hh}:${mm}:${ss}`;
+
+  const rows = d.recentCalls || [];
+  if (!rows.length) return;
+  document.getElementById('liveLogBody').innerHTML = rows.map(r => `
+    <tr class="${r.success ? 'live-log-row-ok' : 'live-log-row-err'}">
+      <td style="text-align:center">${r.success ? '✅' : '❌'}</td>
+      <td style="color:#64748b">${r.time}</td>
+      <td>${r.success ? r.latencyMs+'ms' : '—'}</td>
+      <td>${r.success && r.tokens ? r.tokens+' tk' : '—'}</td>
+      <td style="color:#dc2626;max-width:360px;overflow:hidden;text-overflow:ellipsis">${r.error||''}</td>
+    </tr>`).join('');
+
+  if (!d.running) { clearInterval(liveTimer); liveTimer = null; }
+}
+
+// ===== Test Request =====
+async function testRequest() {
+  const endpointId = +document.getElementById('tkEndpointId').value;
+  const requestBody = document.getElementById('tkRequestBody').value.trim();
+  if (!endpointId) { toast('请先选择模型端点', 'error'); return; }
+  if (!requestBody) { toast('请填写请求体', 'error'); return; }
+  const btn = document.getElementById('testBtn');
+  btn.disabled = true; btn.textContent = '⏳ 请求中...';
+  document.getElementById('testResultPanel').style.display = 'none';
+  if (isMock) {
+    setTimeout(() => {
+      showTestResult({success:true, totalTokens:1024, latencyMs:2340,
+        responseBody:JSON.stringify({"id":"chatcmpl-mock","choices":[{"message":{"role":"assistant","content":"模拟响应内容"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":974,"total_tokens":1024}},null,2)});
+      btn.disabled=false; btn.textContent='🧪 测试请求';
+    }, 1500);
+    return;
+  }
+  try {
+    const result = await api('POST', '/api/test/request', {endpointId, requestBody});
+    showTestResult(result);
+  } catch(e) {
+    showTestResult({success:false, latencyMs:0, errorMessage:e.message});
+  } finally {
+    btn.disabled=false; btn.textContent='🧪 测试请求';
+  }
+}
+
+function showTestResult(r) {
+  document.getElementById('testResultPanel').style.display = '';
+  document.getElementById('testStatusIcon').textContent = r.success ? '✅' : '❌';
+  document.getElementById('testStatusText').innerHTML = r.success
+    ? '<span style="color:#065f46;font-weight:600">请求成功</span>'
+    : '<span style="color:#991b1b;font-weight:600">请求失败</span>';
+  document.getElementById('testLatency').innerHTML = `<span style="color:#64748b">⏱ ${r.latencyMs}ms</span>`;
+  document.getElementById('testTokens').innerHTML = (r.success && r.totalTokens)
+    ? `<span style="color:#6366f1;font-weight:700">🔤 ${r.totalTokens} tokens</span>` : '';
+  let body = r.responseBody || r.errorMessage || '(无响应内容)';
+  try { if (r.responseBody) body = JSON.stringify(JSON.parse(body), null, 2); } catch(e) {}
+  document.getElementById('testResponseBody').textContent = body;
+}
+
+// ===== Init =====
+(function init() {
+  const saved = localStorage.getItem('wm_base') || '';
+  document.getElementById('apiBaseInput').value = saved || location.origin;
+  loadAll();
+})();
+</script>
+</body>
+</html>

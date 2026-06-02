@@ -1,0 +1,51 @@
+# ============================================================
+# application.yml �?本地 fallback 默认�?# 生产环境所有配置通过 Apollo 下发，此处仅作本地开发兜�?# ============================================================
+server:
+  port: 8090
+
+spring:
+  application:
+    name: llm-warmer
+
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+    serialization:
+      write-dates-as-timestamps: false
+
+# ===== 数据源（Venus/Druid，配置由 Apollo tdsql_datasource_config 命名空间下发�?====
+datasource:
+  namespace: tdsql_datasource_config
+
+# ===== MyBatis Plus =====
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    db-config:
+      id-type: auto
+
+# ===== Swagger UI =====
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+# ===== 调度节点控制 =====
+# 生产环境通过 K8s env WARM_SCHEDULER_ENABLED=true 注入到跑批区，业务区保持默认 false
+warm:
+  scheduler:
+    enabled: ${WARM_SCHEDULER_ENABLED:false}
+
+# ===== Actuator =====
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always

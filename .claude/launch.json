@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "llm-warmer-ui",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "src/main/resources/static"],
+      "autoPort": true
+    }
+  ]
+}
