@@ -30,6 +30,7 @@ public class ModelEndpointServiceImpl implements ModelEndpointService {
         endpoint.setBaseUrl(req.getBaseUrl());
         endpoint.setModelName(req.getModelName());
         endpoint.setApiKey(req.getApiKey());
+        // httpMethod 统一转大写存储，兼容前端传 "post"/"POST"
         endpoint.setHttpMethod(req.getHttpMethod() != null ? req.getHttpMethod().toUpperCase() : "POST");
         endpoint.setRequestHeaders(req.getRequestHeaders());
         endpoint.setEnabled(1);
@@ -42,13 +43,14 @@ public class ModelEndpointServiceImpl implements ModelEndpointService {
     @Override
     public void update(UpdateEndpointRequest req) {
         ModelEndpoint endpoint = requireEndpoint(req.getId());
-        if (req.getName() != null) endpoint.setName(req.getName());
-        if (req.getBaseUrl() != null) endpoint.setBaseUrl(req.getBaseUrl());
-        if (req.getModelName() != null) endpoint.setModelName(req.getModelName());
-        if (req.getApiKey() != null) endpoint.setApiKey(req.getApiKey());
-        if (req.getHttpMethod() != null) endpoint.setHttpMethod(req.getHttpMethod().toUpperCase());
+        // 局部更新：只覆盖请求中非 null 的字段
+        if (req.getName() != null)           endpoint.setName(req.getName());
+        if (req.getBaseUrl() != null)        endpoint.setBaseUrl(req.getBaseUrl());
+        if (req.getModelName() != null)      endpoint.setModelName(req.getModelName());
+        if (req.getApiKey() != null)         endpoint.setApiKey(req.getApiKey());
+        if (req.getHttpMethod() != null)     endpoint.setHttpMethod(req.getHttpMethod().toUpperCase());
         if (req.getRequestHeaders() != null) endpoint.setRequestHeaders(req.getRequestHeaders());
-        if (req.getEnabled() != null) endpoint.setEnabled(req.getEnabled());
+        if (req.getEnabled() != null)        endpoint.setEnabled(req.getEnabled());
         endpoint.setUpdatedAt(LocalDateTime.now());
         endpointMapper.updateById(endpoint);
     }
@@ -76,12 +78,18 @@ public class ModelEndpointServiceImpl implements ModelEndpointService {
         return requireEndpoint(id);
     }
 
+    /** 查询端点，不存在则抛 404 业务异常 */
     private ModelEndpoint requireEndpoint(Long id) {
         ModelEndpoint endpoint = endpointMapper.selectById(id);
         if (endpoint == null) throw new BusinessException(404, "模型端点不存在: " + id);
         return endpoint;
     }
 
+    /**
+     * 将实体转为 VO。
+     * 注意：apiKey 不出现在 VO 中，避免通过列表/详情接口泄露密钥。
+     * headerCount 返回头的数量（而非具体内容），供前端展示"N 个自定义头"。
+     */
     private EndpointVO toVO(ModelEndpoint e) {
         EndpointVO vo = new EndpointVO();
         vo.setId(e.getId());
@@ -96,6 +104,7 @@ public class ModelEndpointServiceImpl implements ModelEndpointService {
         return vo;
     }
 
+    /** 解析 requestHeaders JSON，返回头的数量；解析失败返回 0 */
     private int countHeaders(String headersJson) {
         if (headersJson == null || headersJson.isBlank()) return 0;
         try {
