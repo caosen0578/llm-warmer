@@ -27,7 +27,7 @@ public class ModelEndpointController {
         return Result.ok(endpointService.create(req));
     }
 
-    @Operation(summary = "更新模型端点（id 放在请求体中�?)
+    @Operation(summary = "更新模型端点（id 放在请求体中）")
     @PostMapping("/update")
     public Result<Void> update(@Valid @RequestBody UpdateEndpointRequest req) {
         endpointService.update(req);
@@ -47,7 +47,7 @@ public class ModelEndpointController {
         return Result.ok(endpointService.getById(id));
     }
 
-    @Operation(summary = "查询所有端�?)
+    @Operation(summary = "查询所有端点")
     @GetMapping("/list")
     public Result<List<EndpointVO>> list() {
         return Result.ok(endpointService.listAll());

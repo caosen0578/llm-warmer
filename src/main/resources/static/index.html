@@ -999,7 +999,7 @@ async function loadExecutions() {
   if (taskId) qs.set('taskId', taskId);
   qs.set('limit', limit);
   try {
-    allExecutions = await api('GET', '/api/executions?' + qs) || [];
+    allExecutions = await api('GET', '/api/executions/list?' + qs) || [];
     renderExecutions(allExecutions); updateExecStats(allExecutions);
   } catch(e) { toast('加载失败: ' + e.message, 'error'); }
 }

@@ -67,7 +67,7 @@ public class WarmTaskController {
         return Result.ok(taskService.getById(id));
     }
 
-    @Operation(summary = "查询所有任�?)
+    @Operation(summary = "查询所有任务")
     @GetMapping("/list")
     public Result<List<WarmTaskVO>> list() {
         return Result.ok(taskService.listAll());
@@ -77,8 +77,8 @@ public class WarmTaskController {
     @PostMapping("/trigger")
     public Result<Void> trigger(@RequestParam Long id) {
         WarmTask task = taskMapper.selectById(id);
-        if (task == null) throw new BusinessException(404, "任务不存�?);
-        if (task.getEnabled() != 1) throw new BusinessException("任务已禁�?);
+        if (task == null) throw new BusinessException(404, "任务不存在");
+        if (task.getEnabled() != 1) throw new BusinessException("任务已禁用");
         executionEngine.execute(task);
         return Result.ok();
     }
@@ -90,7 +90,7 @@ public class WarmTaskController {
         return Result.ok();
     }
 
-    @Operation(summary = "查询任务当前运行状�?)
+    @Operation(summary = "查询任务当前运行状态")
     @GetMapping("/running")
     public Result<Boolean> running(@RequestParam Long id) {
         return Result.ok(executionEngine.isRunning(id));

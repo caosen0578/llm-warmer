@@ -13,6 +13,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import javax.annotation.PreDestroy;
+
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -52,6 +54,8 @@ public class WarmExecutionEngine {
     public void execute(WarmTask task, String lockKey, String lockOwner) {
         if (runningMap.containsKey(task.getId())) {
             log.warn("[Engine] task={} already running on this node, skip", task.getId());
+            // 释放本次刚抢到的锁，避免锁泄漏（手动触发时 lockKey 为 null）
+            if (lockKey != null) releaseLock(lockKey, lockOwner);
             return;
         }
 
@@ -181,6 +185,16 @@ public class WarmExecutionEngine {
         } catch (Exception e) {
             log.error("[Engine] failed to release lock key={}: {}", lockKey, e.getMessage());
         }
+    }
+
+    @PreDestroy
+    public void onShutdown() {
+        if (runningMap.isEmpty()) return;
+        log.info("[Engine] shutdown — stopping {} running task(s)", runningMap.size());
+        new java.util.ArrayList<>(runningMap.keySet()).forEach(taskId -> {
+            RunningExecution r = runningMap.get(taskId);
+            if (r != null) stop(taskId);
+        });
     }
 
     public boolean isRunning(Long taskId) {

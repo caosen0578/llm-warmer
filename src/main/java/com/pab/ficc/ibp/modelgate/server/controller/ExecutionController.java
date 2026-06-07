@@ -26,8 +26,8 @@ public class ExecutionController {
     private final TaskExecutionMapper executionMapper;
     private final WarmTaskMapper taskMapper;
 
-    @Operation(summary = "查询任务执行历史（按任务ID�?)
-    @GetMapping
+    @Operation(summary = "查询任务执行历史（按任务 ID 筛选）")
+    @GetMapping("/list")
     public Result<List<TaskExecutionVO>> list(@RequestParam(required = false) Long taskId,
                                               @RequestParam(defaultValue = "50") int limit) {
         LambdaQueryWrapper<TaskExecution> wrapper = new LambdaQueryWrapper<TaskExecution>()
